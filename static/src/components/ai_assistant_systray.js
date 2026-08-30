@@ -2,6 +2,7 @@
 import { Component, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
+import { user } from "@web/core/user";
 
 const STORAGE_PREFIX = "mba_ai_assistant.messages.";
 const MAX_STORED_MESSAGES = 30;
@@ -14,7 +15,7 @@ export class AiAssistantSystray extends Component {
     setup() {
         this.orm = useService("orm");
         this.action = useService("action");
-        this.user = useService("user");
+        this.user = user; // "user" es un objeto reactivo importado, no un servicio inyectable en Odoo 18
 
         this.state = useState({
             isOpen: false,
