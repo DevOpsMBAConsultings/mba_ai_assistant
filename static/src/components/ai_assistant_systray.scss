@@ -1,0 +1,137 @@
+/* Estilos del Asistente de IA (MBA Copilot) */
+/* Posicionamiento fijo en la esquina inferior derecha e integración de paleta de colores premium morado/blanco */
+
+.o_ai_systray_item .o_ai_systray_btn {
+    transition: background-color 0.2s ease, color 0.2s ease;
+    color: rgba(255, 255, 255, 0.85) !important; /* Texto en blanco semitransparente para combinar con el navbar */
+}
+
+.o_ai_systray_item .o_ai_systray_btn i {
+    color: rgba(255, 255, 255, 0.95) !important;
+}
+
+.o_ai_systray_item .o_ai_systray_btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #ffffff !important;
+}
+
+.o_ai_systray_item .o_ai_dropdown {
+    font-family: inherit;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    
+    position: fixed !important;
+    bottom: 20px !important;
+    right: 20px !important;
+    top: auto !important;
+    left: auto !important;
+    
+    width: 380px;
+    height: 520px;
+    display: flex;
+    flex-direction: column;
+    z-index: 1060;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_header {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    user-select: none;
+    background-color: #714B67 !important; /* Morado corporativo nativo de Odoo */
+    color: #ffffff !important;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_header .o_ai_close {
+    opacity: 0.8;
+    transition: opacity 0.2s;
+    color: #ffffff !important;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_header .o_ai_close:hover {
+    opacity: 1;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_header .o_ai_minimize {
+    opacity: 0.8;
+    transition: opacity 0.2s;
+    color: #ffffff !important;
+    font-size: 14px;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_header .o_ai_minimize:hover {
+    opacity: 1;
+}
+
+/* Burbuja flotante estilo Odoo Enterprise cuando el chat está minimizado */
+.o_ai_systray_item .o_ai_bubble {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background-color: #714B67;
+    color: #ffffff;
+    z-index: 1060;
+    transition: transform 0.15s ease, background-color 0.2s ease;
+}
+
+.o_ai_systray_item .o_ai_bubble:hover {
+    background-color: #5a3c52;
+    transform: scale(1.06);
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_chat_body {
+    flex-grow: 1;
+    scrollbar-width: thin;
+    max-height: none !important;
+    height: auto !important;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_chat_body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_chat_body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_chat_body::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_chat_body::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.25);
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_chat_body .o_ai_msg {
+    max-width: 85%;
+    word-wrap: break-word;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_footer {
+    background: #ffffff;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_footer .input-group {
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_footer .input-group input:focus {
+    box-shadow: none;
+    outline: none;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_footer .btn-primary-purple {
+    background-color: #714B67 !important;
+    color: #ffffff !important;
+    border: none;
+}
+
+.o_ai_systray_item .o_ai_dropdown .o_ai_footer .btn-primary-purple:hover {
+    background-color: #5a3c52 !important;
+}

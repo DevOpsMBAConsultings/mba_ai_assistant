@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.mba.ai</field>
+        <field name="model">res.config.settings</field>
+        <field name="priority" eval="99"/>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app data-string="Asistente de IA" string="Asistente de IA" name="mba_ai_assistant" logo="/mba_ai_assistant/static/description/icon.png">
+                    <block title="Configuración de Inteligencia Artificial" id="mba_ai_config_section">
+                        <setting id="mba_ai_providers" title="Proveedores de IA" help="Configura tus llaves API para interactuar con los diferentes modelos.">
+                            <div class="content-group">
+                                <div class="row mt16">
+                                    <label for="mba_ai_provider_default" class="col-lg-4 o_light_label"/>
+                                    <field name="mba_ai_provider_default" required="1"/>
+                                </div>
+                                <div class="row mt16">
+                                    <label for="mba_gemini_api_key" class="col-lg-4 o_light_label"/>
+                                    <field name="mba_gemini_api_key" password="True"/>
+                                </div>
+                                <div class="row mt16">
+                                    <label for="mba_anthropic_api_key" class="col-lg-4 o_light_label"/>
+                                    <field name="mba_anthropic_api_key" password="True"/>
+                                </div>
+                                <div class="row mt16">
+                                    <label for="mba_openai_api_key" class="col-lg-4 o_light_label"/>
+                                    <field name="mba_openai_api_key" password="True"/>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
+                </app>
+            </xpath>
+        </field>
+    </record>
+</odoo>
