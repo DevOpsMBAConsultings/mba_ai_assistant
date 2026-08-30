@@ -1,4 +1,3 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_res_config_settings_mba_ai,access_res_config_settings_mba_ai,base.model_res_config_settings,,1,1,1,1
-access_mba_ai_interaction_log_user,access_mba_ai_interaction_log_user,model_mba_ai_interaction_log,base.group_user,1,1,1,0
 access_mba_ai_interaction_log_manager,access_mba_ai_interaction_log_manager,model_mba_ai_interaction_log,base.group_system,1,1,1,1

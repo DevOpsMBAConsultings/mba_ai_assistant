@@ -119,7 +119,7 @@ class AIAssistant(models.AbstractModel):
             respuesta = self._call_gemini(prompt, system_instruction, params, user_id, tool_trace)
 
         try:
-            log = self.env['mba.ai.interaction.log'].create({
+            log = self.env['mba.ai.interaction.log'].sudo().create({
                 'user_id': self.env.uid,
                 'proveedor': provider,
                 'modelo_activo': active_model,

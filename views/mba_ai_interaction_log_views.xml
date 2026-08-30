@@ -84,7 +84,7 @@
         </field>
     </record>
 
-    <menuitem id="menu_mba_ai_root" name="Asistente IA" sequence="80"/>
+    <menuitem id="menu_mba_ai_root" name="Asistente IA" sequence="80" groups="base.group_system"/>
     <menuitem id="menu_mba_ai_interaction_log"
               name="Historial de Interacciones"
               parent="menu_mba_ai_root"
