@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_mba_ai_interaction_log_list" model="ir.ui.view">
+        <field name="name">mba.ai.interaction.log.list</field>
+        <field name="model">mba.ai.interaction.log</field>
+        <field name="arch" type="xml">
+            <list string="Historial de Interacciones IA" default_order="create_date desc">
+                <field name="create_date" string="Fecha"/>
+                <field name="user_id"/>
+                <field name="pregunta"/>
+                <field name="proveedor"/>
+                <field name="feedback" widget="badge" decoration-success="feedback == 'util'" decoration-danger="feedback == 'no_util'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_mba_ai_interaction_log_form" model="ir.ui.view">
+        <field name="name">mba.ai.interaction.log.form</field>
+        <field name="model">mba.ai.interaction.log</field>
+        <field name="arch" type="xml">
+            <form string="Interacción IA" create="false">
+                <sheet>
+                    <group col="4">
+                        <field name="create_date"/>
+                        <field name="user_id"/>
+                        <field name="proveedor"/>
+                        <field name="modelo_activo"/>
+                    </group>
+                    <group>
+                        <field name="feedback"/>
+                    </group>
+                    <notebook>
+                        <page string="Pregunta y Respuesta">
+                            <group string="Pregunta">
+                                <field name="pregunta" nolabel="1"/>
+                            </group>
+                            <group string="Respuesta de la IA">
+                                <field name="respuesta" nolabel="1"/>
+                            </group>
+                            <group string="Comentario del Usuario">
+                                <field name="comentario" nolabel="1"/>
+                            </group>
+                        </page>
+                        <page string="Detalle Técnico">
+                            <field name="herramientas_usadas" nolabel="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_mba_ai_interaction_log_search" model="ir.ui.view">
+        <field name="name">mba.ai.interaction.log.search</field>
+        <field name="model">mba.ai.interaction.log</field>
+        <field name="arch" type="xml">
+            <search string="Buscar Interacciones">
+                <field name="pregunta"/>
+                <field name="user_id"/>
+                <filter string="Sin calificar" name="sin_calificar" domain="[('feedback', '=', False)]"/>
+                <filter string="No útil" name="no_util" domain="[('feedback', '=', 'no_util')]"/>
+                <filter string="Útil" name="util" domain="[('feedback', '=', 'util')]"/>
+                <separator/>
+                <group expand="0" string="Agrupar Por">
+                    <filter string="Usuario" name="group_user" context="{'group_by': 'user_id'}"/>
+                    <filter string="Feedback" name="group_feedback" context="{'group_by': 'feedback'}"/>
+                    <filter string="Proveedor" name="group_proveedor" context="{'group_by': 'proveedor'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_mba_ai_interaction_log" model="ir.actions.act_window">
+        <field name="name">Historial de Interacciones IA</field>
+        <field name="res_model">mba.ai.interaction.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_mba_ai_interaction_log_search"/>
+        <field name="context">{'search_default_no_util': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Aquí aparecerá cada pregunta que los usuarios le hagan al Asistente de IA, junto con la respuesta
+                y el feedback (👍/👎) que hayan dado desde el chat.
+            </p>
+        </field>
+    </record>
+
+    <menuitem id="menu_mba_ai_root" name="Asistente IA" sequence="80"/>
+    <menuitem id="menu_mba_ai_interaction_log"
+              name="Historial de Interacciones"
+              parent="menu_mba_ai_root"
+              action="action_mba_ai_interaction_log"
+              sequence="10"/>
+</odoo>
