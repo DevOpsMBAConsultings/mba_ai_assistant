@@ -37,6 +37,11 @@ class AIAssistant(models.AbstractModel):
         """
         Punto de entrada RPC. Consulta al proveedor de IA por defecto, inyectando el historial si está disponible.
         """
+        if not self.env.user.has_group('mba_ai_assistant.group_mba_ai_assistant_user'):
+            return {
+                'respuesta': 'No tienes acceso al Asistente de IA. Pídele a tu administrador que te asigne el permiso "Usuario del Asistente de IA" en Ajustes → Usuarios.',
+                'log_id': None,
+            }
         params = self.env['ir.config_parameter'].sudo()
         provider = params.get_param('mba_ai_assistant.provider_default', 'gemini')
         user_id = self.env.user.id
