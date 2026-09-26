@@ -35,13 +35,13 @@ class ResConfigSettings(models.TransientModel):
        help="Selecciona qué modelo utilizar por defecto en el asistente."
     )
 
-    mba_ai_use_single_provider = fields.Boolean(
-        string="Usar una sola clave/proveedor para todo",
-        config_parameter="mba_ai_assistant.use_single_provider",
-        default=True,
-        help="Si está marcado, todas las funciones de IA (asistente conversacional, "
-             "análisis de documentos, y las que agreguen otros módulos) usan el "
-             "Proveedor de IA por Defecto de arriba. Si lo desmarca, cada función "
-             "que lo soporte mostrará su propio selector de proveedor en esta misma "
-             "pantalla (aparece al instalar el módulo correspondiente)."
+    mba_ai_use_per_function_provider = fields.Boolean(
+        string="Permitir que cada función elija su propio proveedor",
+        config_parameter="mba_ai_assistant.use_per_function_provider",
+        default=False,
+        help="Si lo activa, cada función de IA que lo soporte (análisis de documentos, "
+             "y las que agreguen otros módulos) podrá tener su propio selector de "
+             "proveedor en esta misma pantalla (aparece al instalar el módulo "
+             "correspondiente). Si lo deja desactivado (recomendado), todas las "
+             "funciones usan el Proveedor de IA por Defecto de abajo."
     )

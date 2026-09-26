@@ -889,8 +889,8 @@ class AIAssistant(models.AbstractModel):
             "usar una sola clave para todo", se usa el default global.
         """
         ICP = self.env['ir.config_parameter'].sudo()
-        use_single = ICP.get_param('mba_ai_assistant.use_single_provider', 'True') == 'True'
-        if use_single or not function_param_key:
+        use_per_function = ICP.get_param('mba_ai_assistant.use_per_function_provider', 'False') == 'True'
+        if not use_per_function or not function_param_key:
             return ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
         return ICP.get_param(function_param_key) or ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
 
