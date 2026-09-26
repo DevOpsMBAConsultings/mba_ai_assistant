@@ -880,21 +880,36 @@ class AIAssistant(models.AbstractModel):
             return f"Excepción al conectar con OpenAI: {str(e)}"
 
 
-    def analyze_document(self, file_base64, mime_type, extraction_prompt, provider=None, model_override=None):
+    def get_effective_provider(self, function_param_key=None):
+        """Resuelve qué proveedor de IA usar para una función dada.
+
+        :param function_param_key: nombre del ir.config_parameter específico de la
+            función que llama (ej. 'mba_ai_cotizador_solar.provider'), definido por
+            el módulo puente correspondiente. Si no se pasa, o si el usuario activó
+            "usar una sola clave para todo", se usa el default global.
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        use_single = ICP.get_param('mba_ai_assistant.use_single_provider', 'True') == 'True'
+        if use_single or not function_param_key:
+            return ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
+        return ICP.get_param(function_param_key) or ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
+
+    def analyze_document(self, file_base64, mime_type, extraction_prompt, provider=None, model_override=None, function_param_key=None):
         """Analiza un documento (PDF o imagen) en una sola pasada, sin historial de
         conversacion ni tool-calling ERP. Devuelve un dict ya parseado de JSON.
 
         :param file_base64: contenido del archivo codificado en base64 (sin el prefijo data:...)
         :param mime_type: ej. 'application/pdf', 'image/png', 'image/jpeg'
         :param extraction_prompt: instruccion de extraccion (el prompt ya afinado por el modulo que llama)
-        :param provider: 'gemini' | 'anthropic' | 'openai' -- si no se especifica, usa el default configurado
+        :param provider: 'gemini' | 'anthropic' | 'openai' -- si se especifica, gana sobre cualquier config
         :param model_override: nombre de modelo especifico -- si no se especifica, usa el default de ese proveedor
+        :param function_param_key: ir.config_parameter especifico de la funcion que llama, para resolver el
+            proveedor efectivo cuando el usuario desactivo "usar una sola clave para todo"
         :return: dict con el JSON parseado de la respuesta del modelo
         :raises UserError: si falta configurar la API key, si el proveedor no soporta el tipo de archivo,
                             o si la respuesta no se pudo parsear como JSON
         """
-        ICP = self.env['ir.config_parameter'].sudo()
-        provider = provider or ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
+        provider = provider or self.get_effective_provider(function_param_key)
 
         if provider == 'gemini':
             return self._call_gemini_document(file_base64, mime_type, extraction_prompt, model_override)
