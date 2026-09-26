@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields, api
+from odoo import models, fields, api, _
+from odoo.exceptions import UserError
 import requests
 import json
 import ast
+import re
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -37,6 +39,11 @@ class AIAssistant(models.AbstractModel):
         """
         Punto de entrada RPC. Consulta al proveedor de IA por defecto, inyectando el historial si está disponible.
         """
+        if not self.env.user.has_group('mba_ai_assistant.group_mba_ai_assistant_user'):
+            return {
+                'respuesta': 'No tienes acceso al Asistente de IA. Pídele a tu administrador que te asigne el permiso "Usuario del Asistente de IA" en Ajustes → Usuarios.',
+                'log_id': None,
+            }
         params = self.env['ir.config_parameter'].sudo()
         provider = params.get_param('mba_ai_assistant.provider_default', 'gemini')
         user_id = self.env.user.id
@@ -93,6 +100,7 @@ class AIAssistant(models.AbstractModel):
             "6. Redacta la respuesta final en un lenguaje natural amigable y profesional basándote en lo que devuelva la herramienta.\n"
             "7. IMPORTANTE: Nunca concluyas que un campo 'no existe' o 'no está disponible' solo porque no aparece en la lista de campos del mapa de modelos de arriba (ese mapa viene resumido/truncado y puede omitir campos reales, especialmente en modelos muy personalizados como account.move en instalaciones con múltiples módulos de contabilidad). Si necesitas un campo específico (ej. amount_total, invoice_date, qty_available) y no aparece en el resumen, llama primero a la herramienta con operation='list_fields' sobre ese modelo para obtener su esquema COMPLETO y real, y luego usa el nombre de campo correcto para tu consulta. Solo informa al usuario que un dato no está disponible después de haber verificado con list_fields.\n"
             "8. IMPORTANTE: Para preguntas de totales/sumas (ej. '¿cuánto se ha facturado?', '¿cuál es el valor de mi inventario?', promedios, etc.) NUNCA uses operation='search_read' para traer registros y sumarlos tú mismo: search_read solo trae un número limitado de registros (por defecto 10) y el total que calcules será incorrecto por subestimación. En su lugar usa siempre operation='sum', indicando en fields_list el campo numérico a sumar (ej. fields_list=['amount_total']) y el domain para filtrar; la suma se calcula sobre TODOS los registros que cumplen el filtro, no solo los primeros. Para '¿cuánto se ha facturado en <mes>?' usa el modelo 'account.move' con domain que incluya move_type en ['out_invoice','out_refund'], state='posted', y el campo 'invoice_date' dentro del rango de fechas del mes solicitado; ten en cuenta que las notas de crédito ('out_refund') restan del total de facturación neta. Si el usuario NO especifica 'bruta' o 'neta' (ej. simplemente '¿cuánto se ha facturado?'), asume que quiere la NETA por defecto (es el número que normalmente se reporta): calcula la suma de 'out_invoice' y la suma de 'out_refund' por separado y réstalas. Solo devuelve la bruta (solo 'out_invoice', sin restar) si el usuario usa explícitamente la palabra 'bruta'. Para '¿cuál es el valor de mi inventario físico?' usa el modelo 'product.product', domain=[['qty_available','>',0]] (y opcionalmente ['type','=','product'] si el campo existe), y operation='sum' con fields_list=['qty_available','standard_price'] para que se calcule cantidad*costo sumado sobre TODOS los productos con stock, en vez de pedir productos uno por uno con search_read y multiplicar manualmente (eso solo trae unos pocos productos por el límite de resultados y da un total muy por debajo del real). 9. IMPORTANTE: Para preguntas sobre COBROS ESPERADOS, VENCIMIENTOS, o 'ventas a X días que se cobran en <mes>' (ej. 'cuánto se vendió a 30 días en agosto que se cobra en septiembre', 'qué facturas vencen este mes', 'cuánto tengo por cobrar el próximo mes'), NO intentes averiguar el nombre o ID del término de pago ('payment_term_id') para calcular manualmente la fecha de vencimiento — Odoo ya la calcula automáticamente en el campo 'invoice_date_due' de 'account.move' (funciona sin importar si el plazo es 15, 30, 45 días, etc.). Usa domain con 'invoice_date' en el rango del mes de la venta/factura Y 'invoice_date_due' en el rango del mes de cobro esperado, sobre move_type='out_invoice' y state='posted', y operation='sum' con fields_list=['amount_total']. Solo pregunta por el término de pago si el usuario pide explícitamente filtrar por un plazo específico y necesitas identificar cuál 'account.payment.term' corresponde a ese plazo."
+            "10. IMPORTANTE: Para preguntas de desglose/breakdown por categoría (ej. 'cuánto facturó CADA vendedor', 'ventas POR producto', 'facturación POR cliente', 'top 5 clientes por monto'), NUNCA hagas una llamada separada por cada valor ni uses operation='sum' repetidamente — en vez de eso usa operation='group_sum' UNA sola vez, indicando fields_list=[campo_a_sumar] (ej. ['amount_total']) y groupby_field=campo_por_el_que_agrupar (ej. 'invoice_user_id' para vendedor, 'partner_id' para cliente, 'product_id' para producto). Esto devuelve la lista completa ya agrupada y ordenada de mayor a menor, en una sola consulta eficiente."
         )
 
         if context_info:
@@ -113,7 +121,7 @@ class AIAssistant(models.AbstractModel):
             respuesta = self._call_gemini(prompt, system_instruction, params, user_id, tool_trace)
 
         try:
-            log = self.env['mba.ai.interaction.log'].create({
+            log = self.env['mba.ai.interaction.log'].sudo().create({
                 'user_id': self.env.uid,
                 'proveedor': provider,
                 'modelo_activo': active_model,
@@ -165,7 +173,7 @@ class AIAssistant(models.AbstractModel):
             return []
 
     @api.model
-    def ejecutar_acciones_erp(self, model, operation, domain=None, record_id=None, vals=None, fields_list=None, limit=10):
+    def ejecutar_acciones_erp(self, model, operation, domain=None, record_id=None, vals=None, fields_list=None, limit=10, groupby_field=None):
         """
         Herramienta expuesta al LLM. Ejecuta de forma segura operaciones ORM de lectura, creación y edición
         respetando las reglas de acceso nativas de Odoo.
@@ -296,6 +304,49 @@ class AIAssistant(models.AbstractModel):
                     campo = campos_numericos[0]
                     total = sum(registros.mapped(campo))
                     return {"result_type": "sum", "model": model, "field": campo, "sum": total, "count_records": len(registros)}
+
+            elif operation == 'group_sum':
+                # Desglose agrupado (ej. "cuánto facturó cada vendedor", "ventas por producto",
+                # "facturación por cliente"): usa read_group nativo de Odoo en vez de traer todos
+                # los registros y agruparlos a mano en Python (mucho más rápido y sin límite de
+                # registros).
+                if not fields_list:
+                    return {"error": "Debes indicar en 'fields_list' el campo numérico a sumar, ej. ['amount_total']."}
+                if not groupby_field:
+                    return {"error": "Debes indicar 'groupby_field' con el campo por el cual agrupar (ej. 'invoice_user_id', 'partner_id'). Usa operation='list_fields' si no conoces el nombre exacto del campo."}
+
+                campo_suma = fields_list[0]
+                if campo_suma not in model_obj._fields or model_obj._fields[campo_suma].type not in ('integer', 'float', 'monetary'):
+                    return {"error": f"El campo '{campo_suma}' no existe en '{model}' o no es numérico. Usa operation='list_fields' para verificar los campos disponibles."}
+                if groupby_field not in model_obj._fields:
+                    return {"error": f"El campo de agrupación '{groupby_field}' no existe en '{model}'. Usa operation='list_fields' para verificar los campos disponibles."}
+
+                safe_domain = []
+                if domain:
+                    if isinstance(domain, str):
+                        safe_domain = _loose_json_parse(domain)
+                    elif isinstance(domain, list):
+                        safe_domain = domain
+
+                try:
+                    grupos = model_obj.read_group(safe_domain, [campo_suma], [groupby_field])
+                except Exception as e:
+                    return {"error": f"No se pudo agrupar por '{groupby_field}': {str(e)}. Puede que sea un campo calculado no almacenado (no agregable directamente)."}
+
+                resultado = []
+                for g in grupos:
+                    etiqueta = g.get(groupby_field)
+                    if isinstance(etiqueta, (list, tuple)):
+                        etiqueta = etiqueta[1] if len(etiqueta) > 1 else (etiqueta[0] if etiqueta else "(sin definir)")
+                    elif etiqueta is False:
+                        etiqueta = "(sin definir)"
+                    resultado.append({
+                        "grupo": etiqueta,
+                        "suma": g.get(campo_suma, 0),
+                        "cantidad_registros": g.get("__count", g.get(f"{groupby_field}_count", 0)),
+                    })
+                resultado.sort(key=lambda x: x["suma"] or 0, reverse=True)
+                return {"result_type": "group_sum", "model": model, "field": campo_suma, "groupby": groupby_field, "grupos": resultado}
 
             else:
                 safe_domain = []
@@ -465,7 +516,8 @@ class AIAssistant(models.AbstractModel):
                             record_id=func_args.get('record_id'),
                             vals=func_args.get('vals'),
                             fields_list=func_args.get('fields_list'),
-                            limit=func_args.get('limit', 10)
+                            limit=func_args.get('limit', 10),
+                            groupby_field=func_args.get('groupby_field')
                         )
                         if tool_trace is not None:
                             tool_trace.append({
@@ -473,6 +525,7 @@ class AIAssistant(models.AbstractModel):
                                 "model": func_args.get('model'),
                                 "domain": func_args.get('domain'),
                                 "fields_list": func_args.get('fields_list'),
+                                "groupby_field": func_args.get('groupby_field'),
                                 "resultado": action_result if isinstance(action_result, (dict, list)) else str(action_result)[:300],
                             })
                         
@@ -546,8 +599,8 @@ class AIAssistant(models.AbstractModel):
                         },
                         "operation": {
                             "type": "string",
-                            "description": "La acción ORM a ejecutar: 'search_read', 'count', 'create', 'write', 'list_fields' (esquema completo de campos) o 'sum' (suma sobre TODOS los registros del domain: fields_list=[campo] suma un campo; fields_list=[campo_cantidad, campo_costo] multiplica ambos por registro y suma el producto, ej. valor de inventario).",
-                            "enum": ["search_read", "count", "create", "write", "list_fields", "sum"]
+                            "description": "La acción ORM a ejecutar: 'search_read', 'count', 'create', 'write', 'list_fields' (esquema completo de campos), 'sum' (suma sobre TODOS los registros del domain: fields_list=[campo] suma un campo; fields_list=[campo_cantidad, campo_costo] multiplica ambos por registro y suma el producto, ej. valor de inventario) o 'group_sum' (desglose agrupado, ej. facturación POR CADA vendedor/cliente/producto: fields_list=[campo_a_sumar], groupby_field=campo_de_agrupacion).",
+                            "enum": ["search_read", "count", "create", "write", "list_fields", "sum", "group_sum"]
                         },
                         "domain": {
                             "type": "string",
@@ -565,6 +618,10 @@ class AIAssistant(models.AbstractModel):
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Lista de campos específicos a leer."
+                        },
+                        "groupby_field": {
+                            "type": "string",
+                            "description": "Campo por el cual agrupar los resultados. Obligatorio (y solo aplica) para operation='group_sum', ej. 'invoice_user_id' (vendedor), 'partner_id' (cliente), 'product_id' (producto)."
                         },
                         "limit": {
                             "type": "integer",
@@ -622,7 +679,8 @@ class AIAssistant(models.AbstractModel):
                             record_id=tool_input.get('record_id'),
                             vals=tool_input.get('vals'),
                             fields_list=tool_input.get('fields_list'),
-                            limit=tool_input.get('limit', 10)
+                            limit=tool_input.get('limit', 10),
+                            groupby_field=tool_input.get('groupby_field')
                         )
                         if tool_trace is not None:
                             tool_trace.append({
@@ -630,6 +688,7 @@ class AIAssistant(models.AbstractModel):
                                 "model": tool_input.get('model'),
                                 "domain": tool_input.get('domain'),
                                 "fields_list": tool_input.get('fields_list'),
+                                "groupby_field": tool_input.get('groupby_field'),
                                 "resultado": action_result if isinstance(action_result, (dict, list)) else str(action_result)[:300],
                             })
                         
@@ -699,8 +758,8 @@ class AIAssistant(models.AbstractModel):
                             },
                             "operation": {
                                 "type": "string",
-                                "description": "La acción ORM a ejecutar: 'search_read', 'count', 'create', 'write', 'list_fields' (esquema completo de campos) o 'sum' (suma sobre TODOS los registros del domain: fields_list=[campo] suma un campo; fields_list=[campo_cantidad, campo_costo] multiplica ambos por registro y suma el producto, ej. valor de inventario).",
-                                "enum": ["search_read", "count", "create", "write", "list_fields", "sum"]
+                                "description": "La acción ORM a ejecutar: 'search_read', 'count', 'create', 'write', 'list_fields' (esquema completo de campos), 'sum' (suma sobre TODOS los registros del domain: fields_list=[campo] suma un campo; fields_list=[campo_cantidad, campo_costo] multiplica ambos por registro y suma el producto, ej. valor de inventario) o 'group_sum' (desglose agrupado, ej. facturación POR CADA vendedor/cliente/producto: fields_list=[campo_a_sumar], groupby_field=campo_de_agrupacion).",
+                                "enum": ["search_read", "count", "create", "write", "list_fields", "sum", "group_sum"]
                             },
                             "domain": {
                                 "type": "string",
@@ -718,6 +777,10 @@ class AIAssistant(models.AbstractModel):
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Lista de campos específicos a leer."
+                            },
+                            "groupby_field": {
+                                "type": "string",
+                                "description": "Campo por el cual agrupar los resultados. Obligatorio (y solo aplica) para operation='group_sum', ej. 'invoice_user_id' (vendedor), 'partner_id' (cliente), 'product_id' (producto)."
                             },
                             "limit": {
                                 "type": "integer",
@@ -774,7 +837,8 @@ class AIAssistant(models.AbstractModel):
                             record_id=func_args.get('record_id'),
                             vals=func_args.get('vals'),
                             fields_list=func_args.get('fields_list'),
-                            limit=func_args.get('limit', 10)
+                            limit=func_args.get('limit', 10),
+                            groupby_field=func_args.get('groupby_field')
                         )
                         if tool_trace is not None:
                             tool_trace.append({
@@ -782,6 +846,7 @@ class AIAssistant(models.AbstractModel):
                                 "model": func_args.get('model'),
                                 "domain": func_args.get('domain'),
                                 "fields_list": func_args.get('fields_list'),
+                                "groupby_field": func_args.get('groupby_field'),
                                 "resultado": query_result if isinstance(query_result, (dict, list)) else str(query_result)[:300],
                             })
                         
@@ -813,3 +878,154 @@ class AIAssistant(models.AbstractModel):
             
         except Exception as e:
             return f"Excepción al conectar con OpenAI: {str(e)}"
+
+
+    def analyze_document(self, file_base64, mime_type, extraction_prompt, provider=None, model_override=None):
+        """Analiza un documento (PDF o imagen) en una sola pasada, sin historial de
+        conversacion ni tool-calling ERP. Devuelve un dict ya parseado de JSON.
+
+        :param file_base64: contenido del archivo codificado en base64 (sin el prefijo data:...)
+        :param mime_type: ej. 'application/pdf', 'image/png', 'image/jpeg'
+        :param extraction_prompt: instruccion de extraccion (el prompt ya afinado por el modulo que llama)
+        :param provider: 'gemini' | 'anthropic' | 'openai' -- si no se especifica, usa el default configurado
+        :param model_override: nombre de modelo especifico -- si no se especifica, usa el default de ese proveedor
+        :return: dict con el JSON parseado de la respuesta del modelo
+        :raises UserError: si falta configurar la API key, si el proveedor no soporta el tipo de archivo,
+                            o si la respuesta no se pudo parsear como JSON
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        provider = provider or ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
+
+        if provider == 'gemini':
+            return self._call_gemini_document(file_base64, mime_type, extraction_prompt, model_override)
+        elif provider == 'anthropic':
+            return self._call_claude_document(file_base64, mime_type, extraction_prompt, model_override)
+        elif provider == 'openai':
+            return self._call_openai_document(file_base64, mime_type, extraction_prompt, model_override)
+        else:
+            raise UserError(_("Proveedor de IA no reconocido: %s") % provider)
+
+    def _extract_json_from_text(self, text):
+        """Limpia fences de markdown (```json ... ```) y extrae el primer bloque {...}."""
+        text = re.sub(r'^```(?:json)?\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text.strip())
+        start = text.find('{')
+        end = text.rfind('}')
+        if start == -1 or end == -1:
+            raise UserError(_("La IA no devolvio un JSON valido. Respuesta recibida: %s") % text[:500])
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError as e:
+            raise UserError(_("No se pudo interpretar la respuesta de la IA como JSON: %s") % str(e))
+
+    def _call_gemini_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.gemini_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Google Gemini en Ajustes > Asistente de IA."))
+
+        model = model_override or 'gemini-2.5-pro'
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": extraction_prompt},
+                    {"inline_data": {"mime_type": mime_type, "data": file_base64}},
+                ]
+            }],
+            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Gemini: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['candidates'][0]['content']['parts'][0]['text']
+        except (KeyError, IndexError):
+            raise UserError(_("Gemini no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_claude_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.anthropic_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Anthropic Claude en Ajustes > Asistente de IA."))
+
+        model = model_override or 'claude-sonnet-4-5-20250929'
+        doc_type = 'document' if mime_type == 'application/pdf' else 'image'
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": doc_type, "source": {"type": "base64", "media_type": mime_type, "data": file_base64}},
+                    {"type": "text", "text": extraction_prompt},
+                ],
+            }],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        try:
+            response = requests.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Anthropic Claude: %s") % str(e))
+
+        data = response.json()
+        content_blocks = data.get('content', [])
+        text = None
+        for block in content_blocks:
+            if block.get('type') == 'text':
+                text = block.get('text')
+                break
+        if text is None:
+            raise UserError(_("Claude no devolvio una respuesta de texto valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_openai_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.openai_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de OpenAI en Ajustes > Asistente de IA."))
+
+        if mime_type == 'application/pdf':
+            raise UserError(_(
+                "OpenAI (Chat Completions) no soporta analisis directo de PDF en este metodo. "
+                "Seleccione Gemini o Anthropic Claude para analizar documentos PDF."
+            ))
+
+        model = model_override or 'gpt-4o'
+        payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{file_base64}"}},
+                ],
+            }],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con OpenAI: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("OpenAI no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
