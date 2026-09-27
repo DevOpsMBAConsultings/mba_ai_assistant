@@ -36,7 +36,7 @@ class AIInteractionLog(models.Model):
             return {"error": "Valor de feedback inválido."}
         if not log_id:
             return {"error": "Falta el identificador de la interacción."}
-        registro = self.browse(int(log_id))
+        registro = self.sudo().browse(int(log_id))
         if not registro.exists():
             return {"error": "No se encontró el registro de interacción."}
         vals = {'feedback': valor}

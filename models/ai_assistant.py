@@ -1006,6 +1006,126 @@ class AIAssistant(models.AbstractModel):
 
         return self._extract_json_from_text(text)
 
+
+
+    def analyze_structured_data(self, prompt, provider=None, model_override=None, function_param_key=None):
+        """Analiza datos estructurados (texto/JSON ya armado por quien llama) en una sola
+        pasada, sin archivo adjunto y sin historial de conversacion. Hermano de
+        analyze_document(), para casos donde la entrada es texto en vez de un PDF/imagen
+        (ej. explicar o reconsiderar una decision ya tomada por otra logica, a partir de
+        datos ya calculados).
+
+        :param prompt: instruccion completa, con los datos relevantes ya serializados
+            dentro del texto por quien llama (este metodo no adjunta ningun archivo)
+        :param provider: 'gemini' | 'anthropic' | 'openai' -- si no se especifica, usa
+            get_effective_provider()
+        :param model_override: nombre de modelo especifico
+        :param function_param_key: ir.config_parameter especifico de la funcion que llama,
+            para resolver el proveedor efectivo cuando "usar una sola clave para todo" esta
+            desactivado
+        :return: dict con el JSON parseado de la respuesta del modelo
+        :raises UserError: si falta configurar la API key o si la respuesta no se pudo
+            parsear como JSON
+        """
+        provider = provider or self.get_effective_provider(function_param_key)
+
+        if provider == 'gemini':
+            return self._call_gemini_structured(prompt, model_override)
+        elif provider == 'anthropic':
+            return self._call_claude_structured(prompt, model_override)
+        elif provider == 'openai':
+            return self._call_openai_structured(prompt, model_override)
+        else:
+            raise UserError(_("Proveedor de IA no reconocido: %s") % provider)
+
+    def _call_gemini_structured(self, prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.gemini_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Google Gemini en Ajustes > Asistente de IA."))
+
+        model = model_override or 'gemini-2.5-pro'
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Gemini: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['candidates'][0]['content']['parts'][0]['text']
+        except (KeyError, IndexError):
+            raise UserError(_("Gemini no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_claude_structured(self, prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.anthropic_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Anthropic Claude en Ajustes > Asistente de IA."))
+
+        model = model_override or 'claude-sonnet-4-5-20250929'
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        try:
+            response = requests.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Anthropic Claude: %s") % str(e))
+
+        data = response.json()
+        content_blocks = data.get('content', [])
+        text = None
+        for block in content_blocks:
+            if block.get('type') == 'text':
+                text = block.get('text')
+                break
+        if text is None:
+            raise UserError(_("Claude no devolvio una respuesta de texto valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_openai_structured(self, prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.openai_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de OpenAI en Ajustes > Asistente de IA."))
+
+        model = model_override or 'gpt-4o'
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con OpenAI: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("OpenAI no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
     def _call_openai_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
         ICP = self.env['ir.config_parameter'].sudo()
         api_key = ICP.get_param('mba_ai_assistant.openai_api_key')

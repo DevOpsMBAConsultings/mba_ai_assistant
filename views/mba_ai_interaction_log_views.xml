@@ -61,7 +61,7 @@
                 <filter string="No útil" name="no_util" domain="[('feedback', '=', 'no_util')]"/>
                 <filter string="Útil" name="util" domain="[('feedback', '=', 'util')]"/>
                 <separator/>
-                <group expand="0" string="Agrupar Por">
+                <group>
                     <filter string="Usuario" name="group_user" context="{'group_by': 'user_id'}"/>
                     <filter string="Feedback" name="group_feedback" context="{'group_by': 'feedback'}"/>
                     <filter string="Proveedor" name="group_proveedor" context="{'group_by': 'proveedor'}"/>
@@ -84,7 +84,11 @@
         </field>
     </record>
 
-    <menuitem id="menu_mba_ai_root" name="Asistente IA" sequence="80"/>
+    <menuitem id="menu_mba_ai_root"
+              name="Asistente IA"
+              web_icon="mba_ai_assistant,static/description/icon.png"
+              sequence="80"
+              groups="base.group_system"/>
     <menuitem id="menu_mba_ai_interaction_log"
               name="Historial de Interacciones"
               parent="menu_mba_ai_root"

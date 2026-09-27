@@ -1,6 +1,6 @@
 {
     'name': 'Asistente de IA (MBA Consultings)',
-    'version': '19.0.1.8',
+    'version': '19.0.1.9',
     'category': 'Productivity',
     'summary': 'Asistente de Inteligencia Artificial (Claude, Gemini, OpenAI) en la barra superior (Systray) con contexto de vistas.',
     'description': """

@@ -1,7 +1,8 @@
 /** @odoo-module **/
-import { Component, useState } from "@odoo/owl";
+import { Component, useState, onWillStart } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
+import { user } from "@web/core/user";
 
 const STORAGE_PREFIX = "mba_ai_assistant.messages.";
 const MAX_STORED_MESSAGES = 30;
@@ -14,14 +15,22 @@ export class AiAssistantSystray extends Component {
     setup() {
         this.orm = useService("orm");
         this.action = useService("action");
-        this.user = useService("user");
+        this.user = user; // "user" es un objeto reactivo importado, no un servicio inyectable en Odoo 18
 
         this.state = useState({
             isOpen: false,
             minimized: false,
             inputPrompt: "",
             messages: [DEFAULT_GREETING],
-            loading: false
+            loading: false,
+            hasAccess: false
+        });
+
+        // Ocultar el ícono por completo si el usuario no tiene el grupo de acceso asignado
+        // (Ajustes -> Usuarios -> [usuario] -> Derechos de acceso -> "Usuario del Asistente de IA").
+        // onWillStart se espera ANTES del primer render, así que no hay parpadeo del ícono.
+        onWillStart(async () => {
+            this.state.hasAccess = await user.hasGroup("mba_ai_assistant.group_mba_ai_assistant_user");
         });
 
         // Restaurar la conversación guardada en este navegador (si existe) para que
