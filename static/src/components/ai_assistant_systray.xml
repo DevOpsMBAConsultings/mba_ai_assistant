@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <templates xml:space="preserve">
     <t t-name="mba_ai_assistant.AiAssistantSystray">
-        <div t-if="state.hasAccess" class="o_ai_systray_item position-relative d-flex align-items-center h-100">
+        <div t-if="this.state.hasAccess" class="o_ai_systray_item position-relative d-flex align-items-center h-100">
             <!-- Botón en la Barra Superior (Systray Icon) - Clases de texto actualizadas para usar blanco/gris claro -->
             <div t-on-click="toggleDropdown"
                  class="o_ai_systray_btn d-flex align-items-center justify-content-center px-3 h-100 cursor-pointer text-white"
@@ -11,7 +11,7 @@
             </div>
 
             <!-- Desplegable del Chat -->
-            <div t-if="state.isOpen and !state.minimized" class="o_ai_dropdown dropdown-menu show position-absolute end-0 p-0 shadow-lg border-0"
+            <div t-if="this.state.isOpen and !this.state.minimized" class="o_ai_dropdown dropdown-menu show position-absolute end-0 p-0 shadow-lg border-0"
                  style="width: 360px; top: 100%; margin-top: 1px; z-index: 1050; border-radius: 12px; overflow: hidden;">
 
                 <!-- Encabezado - Modificado a tema morado corporativo -->
@@ -29,10 +29,10 @@
 
                 <!-- Historial de Conversación -->
                 <div class="o_ai_chat_body p-3 overflow-auto d-flex flex-column gap-2 bg-light" style="height: 300px;">
-                    <t t-foreach="state.messages" t-as="msg" t-key="msg.role + msg.content">
+                    <t t-foreach="this.state.messages" t-as="msg" t-key="msg.role + msg.content">
                         <!-- Usar color morado para los mensajes del usuario -->
                         <div t-attf-class="o_ai_msg p-2 rounded-3 max-width-80 #{msg.role === 'user' ? 'bg-primary text-white align-self-end ms-4' : 'bg-white text-dark align-self-start border me-4 shadow-sm'}">
-                            <span style="white-space: pre-wrap; font-size: 13px;" t-esc="msg.content"/>
+                            <span style="white-space: pre-wrap; font-size: 13px;" t-out="msg.content"/>
                             <div t-if="msg.role === 'assistant' and msg.logId" class="o_ai_feedback d-flex gap-2 mt-1 pt-1 border-top">
                                 <i t-attf-class="fa fa-thumbs-up cursor-pointer #{msg.feedback === 'util' ? 'text-success' : 'text-muted'}"
                                    title="Esta respuesta fue útil"
@@ -44,7 +44,7 @@
                             </div>
                         </div>
                     </t>
-                    <div t-if="state.loading" class="align-self-start p-2 rounded bg-white border text-muted">
+                    <div t-if="this.state.loading" class="align-self-start p-2 rounded bg-white border text-muted">
                         <i class="fa fa-circle-o-notch fa-spin me-2"/> Generando respuesta...
                     </div>
                 </div>
@@ -55,14 +55,15 @@
                         <input type="text"
                                class="form-control border-0 bg-light py-2"
                                placeholder="Haz una pregunta o analiza el formulario..."
-                               t-model="state.inputPrompt"
+                               t-att-value="this.state.inputPrompt"
+                               t-on-input="(ev) => this.state.inputPrompt = ev.target.value"
                                t-on-keydown="onKeyDown"
-                               t-att-disabled="state.loading"/>
+                               t-att-disabled="this.state.loading"/>
                         <!-- Botón de envío modificado a color morado corporativo -->
                         <button class="btn btn-primary-purple px-3 border-0"
                                 type="button"
                                 t-on-click="sendMessage"
-                                t-att-disabled="state.loading">
+                                t-att-disabled="this.state.loading">
                             <i class="fa fa-paper-plane"/>
                         </button>
                     </div>
@@ -70,7 +71,7 @@
             </div>
 
             <!-- Burbuja flotante cuando el chat está minimizado -->
-            <div t-if="state.isOpen and state.minimized"
+            <div t-if="this.state.isOpen and this.state.minimized"
                  class="o_ai_bubble d-flex align-items-center justify-content-center cursor-pointer shadow-lg"
                  t-on-click="restore"
                  title="Asistente IA (minimizado)">

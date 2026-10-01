@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState, onWillStart } from "@odoo/owl";
+import { Component, proxy, onWillStart } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
 import { user } from "@web/core/user";
@@ -17,7 +17,7 @@ export class AiAssistantSystray extends Component {
         this.action = useService("action");
         this.user = user; // "user" es un objeto reactivo importado, no un servicio inyectable en Odoo 18
 
-        this.state = useState({
+        this.state = proxy({
             isOpen: false,
             minimized: false,
             inputPrompt: "",
