@@ -3,7 +3,7 @@
     <t t-name="mba_ai_assistant.AiAssistantSystray">
         <div t-if="this.state.hasAccess" class="o_ai_systray_item position-relative d-flex align-items-center h-100">
             <!-- Botón en la Barra Superior (Systray Icon) - Clases de texto actualizadas para usar blanco/gris claro -->
-            <div t-on-click="toggleDropdown"
+            <div t-on-click="this.toggleDropdown"
                  class="o_ai_systray_btn d-flex align-items-center justify-content-center px-3 h-100 cursor-pointer text-white"
                  title="Asistente de IA (Claude / Gemini / OpenAI)">
                 <i class="fa fa-magic fa-lg"/>
@@ -21,9 +21,9 @@
                         <span class="fw-bold">Asistente IA</span>
                     </div>
                     <div class="d-flex align-items-center gap-3">
-                        <i class="fa fa-plus-circle o_ai_nueva cursor-pointer" t-on-click="nuevaConversacion" title="Nueva conversación"/>
-                        <i class="fa fa-window-minimize o_ai_minimize cursor-pointer" t-on-click="minimize" title="Minimizar"/>
-                        <span class="o_ai_close cursor-pointer fs-5 fw-bold" t-on-click="close">✕</span>
+                        <i class="fa fa-plus-circle o_ai_nueva cursor-pointer" t-on-click="this.nuevaConversacion" title="Nueva conversación"/>
+                        <i class="fa fa-window-minimize o_ai_minimize cursor-pointer" t-on-click="this.minimize" title="Minimizar"/>
+                        <span class="o_ai_close cursor-pointer fs-5 fw-bold" t-on-click="this.close">✕</span>
                     </div>
                 </div>
 
@@ -57,12 +57,12 @@
                                placeholder="Haz una pregunta o analiza el formulario..."
                                t-att-value="this.state.inputPrompt"
                                t-on-input="(ev) => this.state.inputPrompt = ev.target.value"
-                               t-on-keydown="onKeyDown"
+                               t-on-keydown="this.onKeyDown"
                                t-att-disabled="this.state.loading"/>
                         <!-- Botón de envío modificado a color morado corporativo -->
                         <button class="btn btn-primary-purple px-3 border-0"
                                 type="button"
-                                t-on-click="sendMessage"
+                                t-on-click="this.sendMessage"
                                 t-att-disabled="this.state.loading">
                             <i class="fa fa-paper-plane"/>
                         </button>
@@ -73,7 +73,7 @@
             <!-- Burbuja flotante cuando el chat está minimizado -->
             <div t-if="this.state.isOpen and this.state.minimized"
                  class="o_ai_bubble d-flex align-items-center justify-content-center cursor-pointer shadow-lg"
-                 t-on-click="restore"
+                 t-on-click="this.restore"
                  title="Asistente IA (minimizado)">
                 <i class="fa fa-magic fa-lg"/>
             </div>
