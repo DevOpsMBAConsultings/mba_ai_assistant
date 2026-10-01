@@ -6,7 +6,7 @@
             <div t-on-click="this.toggleDropdown"
                  class="o_ai_systray_btn d-flex align-items-center justify-content-center px-3 h-100 cursor-pointer text-white"
                  title="Asistente de IA (Claude / Gemini / OpenAI)">
-                <i class="fa fa-magic fa-lg"/>
+                <i class="oi oi-lg" data-icon="wand_stars"/>
                 <span class="ms-2 d-none d-lg-inline fw-bold text-white">Asistente IA</span>
             </div>
 
@@ -17,12 +17,12 @@
                 <!-- Encabezado - Modificado a tema morado corporativo -->
                 <div class="o_ai_header px-3 py-2 d-flex align-items-center justify-content-between">
                     <div class="d-flex align-items-center">
-                        <i class="fa fa-magic me-2 fa-lg"/>
+                        <i class="oi oi-lg me-2" data-icon="wand_stars"/>
                         <span class="fw-bold">Asistente IA</span>
                     </div>
                     <div class="d-flex align-items-center gap-3">
-                        <i class="fa fa-plus-circle o_ai_nueva cursor-pointer" t-on-click="this.nuevaConversacion" title="Nueva conversación"/>
-                        <i class="fa fa-window-minimize o_ai_minimize cursor-pointer" t-on-click="this.minimize" title="Minimizar"/>
+                        <i class="oi o_ai_nueva cursor-pointer" data-icon="add_circle" t-on-click="this.nuevaConversacion" title="Nueva conversación"/>
+                        <i class="oi o_ai_minimize cursor-pointer" data-icon="minimize" t-on-click="this.minimize" title="Minimizar"/>
                         <span class="o_ai_close cursor-pointer fs-5 fw-bold" t-on-click="this.close">✕</span>
                     </div>
                 </div>
@@ -34,10 +34,12 @@
                         <div t-attf-class="o_ai_msg p-2 rounded-3 max-width-80 #{msg.role === 'user' ? 'bg-primary text-white align-self-end ms-4' : 'bg-white text-dark align-self-start border me-4 shadow-sm'}">
                             <span style="white-space: pre-wrap; font-size: 13px;" t-out="msg.content"/>
                             <div t-if="msg.role === 'assistant' and msg.logId" class="o_ai_feedback d-flex gap-2 mt-1 pt-1 border-top">
-                                <i t-attf-class="fa fa-thumbs-up cursor-pointer #{msg.feedback === 'util' ? 'text-success' : 'text-muted'}"
+                                <i t-attf-class="oi cursor-pointer #{msg.feedback === 'util' ? 'text-success' : 'text-muted'}"
+                                   data-icon="thumb_up"
                                    title="Esta respuesta fue útil"
                                    t-on-click="() => this.sendFeedback(msg, 'util')"/>
-                                <i t-attf-class="fa fa-thumbs-down cursor-pointer #{msg.feedback === 'no_util' ? 'text-danger' : 'text-muted'}"
+                                <i t-attf-class="oi cursor-pointer #{msg.feedback === 'no_util' ? 'text-danger' : 'text-muted'}"
+                                     data-icon="thumb_down"
                                    title="Esta respuesta no fue útil"
                                    t-on-click="() => this.sendFeedback(msg, 'no_util')"/>
                                 <span t-if="msg.feedback" class="text-muted" style="font-size: 11px;">¡Gracias por tu feedback!</span>
@@ -45,7 +47,7 @@
                         </div>
                     </t>
                     <div t-if="this.state.loading" class="align-self-start p-2 rounded bg-white border text-muted">
-                        <i class="fa fa-circle-o-notch fa-spin me-2"/> Generando respuesta...
+                        <i class="oi oi-spin me-2" data-icon="autorenew"/> Generando respuesta...
                     </div>
                 </div>
 
@@ -64,7 +66,7 @@
                                 type="button"
                                 t-on-click="this.sendMessage"
                                 t-att-disabled="this.state.loading">
-                            <i class="fa fa-paper-plane"/>
+                            <i class="oi" data-icon="send"/>
                         </button>
                     </div>
                 </div>
@@ -75,7 +77,7 @@
                  class="o_ai_bubble d-flex align-items-center justify-content-center cursor-pointer shadow-lg"
                  t-on-click="this.restore"
                  title="Asistente IA (minimizado)">
-                <i class="fa fa-magic fa-lg"/>
+                <i class="oi oi-lg" data-icon="wand_stars"/>
             </div>
         </div>
     </t>
