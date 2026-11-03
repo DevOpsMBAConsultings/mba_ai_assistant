@@ -5,6 +5,8 @@ import requests
 import json
 import ast
 import re
+import io
+import PyPDF2
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -1195,7 +1197,7 @@ class AIAssistant(models.AbstractModel):
         return self._extract_json_from_text(text)
 
     def _call_deepseek_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
-        """Envía documento/imagen a DeepSeek usando endpoint Anthropic o OpenAI."""
+        """Envía documento/imagen a DeepSeek. Soporta imágenes de visión nativa y extracción de texto de PDFs."""
         ICP = self.env['ir.config_parameter'].sudo()
         api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
         if not api_key:
@@ -1203,197 +1205,31 @@ class AIAssistant(models.AbstractModel):
 
         model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
 
-        # 1. Probar primero vía endpoint compatible con Anthropic
-        doc_type = 'document' if mime_type == 'application/pdf' else 'image'
-        anthropic_payload = {
-            "model": model,
-            "max_tokens": 4096,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": doc_type, "source": {"type": "base64", "media_type": mime_type, "data": file_base64}},
-                    {"type": "text", "text": extraction_prompt},
-                ],
-            }],
-        }
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        try:
-            response = requests.post("https://api.deepseek.com/anthropic/v1/messages", json=anthropic_payload, headers=headers, timeout=60)
-            if response.status_code == 200:
-                data = response.json()
-                text = "".join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
-                return self._extract_json_from_text(text)
-        except Exception as e:
-            _logger.warning("Fallo en endpoint Anthropic de DeepSeek: %s. Reintentando por OpenAI format...", e)
-
-        # 2. Fallback a endpoint chat/completions OpenAI
-        image_url = f"data:{mime_type};base64,{file_base64}"
-        openai_payload = {
-            "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": extraction_prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ]
-            }],
-            "temperature": 0.0,
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        try:
-            response = requests.post("https://api.deepseek.com/chat/completions", json=openai_payload, headers=headers, timeout=60)
-            response.raise_for_status()
-            data = response.json()
-            text = data['choices'][0]['message']['content']
-            return self._extract_json_from_text(text)
-        except requests.exceptions.RequestException as e:
-            raise UserError(_("Error al conectar con DeepSeek Document: %s") % str(e))
-
-
-    def _call_openai_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
-        ICP = self.env['ir.config_parameter'].sudo()
-        api_key = ICP.get_param('mba_ai_assistant.openai_api_key')
-        if not api_key:
-            raise UserError(_("Falta configurar la API Key de OpenAI en Ajustes > Asistente de IA."))
-
+        # Caso A: Si es PDF, DeepSeek no procesa archivos binarios PDF directamente.
+        # Extraemos el texto digital con PyPDF2 y se lo enviamos como prompt.
         if mime_type == 'application/pdf':
-            raise UserError(_(
-                "OpenAI (Chat Completions) no soporta analisis directo de PDF en este metodo. "
-                "Seleccione Gemini o Anthropic Claude para analizar documentos PDF."
-            ))
+            extracted_text = ""
+            try:
+                import base64
+                pdf_bytes = base64.b64decode(file_base64)
+                reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+                for page in reader.pages:
+                    extracted_text += (page.extract_text() or "") + "\n"
+            except Exception as e:
+                _logger.warning("Error extrayendo texto del PDF para DeepSeek: %s", e)
 
-        model = model_override or 'gpt-4o'
-        payload = {
-            "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": extraction_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{file_base64}"}},
-                ],
-            }],
-            "temperature": 0.0,
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        try:
-            response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=60)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            raise UserError(_("Error al conectar con OpenAI: %s") % str(e))
-
-        data = response.json()
-        try:
-            text = data['choices'][0]['message']['content']
-        except (KeyError, IndexError):
-            raise UserError(_("OpenAI no devolvio una respuesta valida: %s") % str(data)[:500])
-
-        return self._extract_json_from_text(text)
-
-    # =========================================================================
-    # DEEPSEEK CALLS (CHAT, STRUCTURED & DOCUMENT VISION)
-    # =========================================================================
-    def _call_deepseek(self, prompt, system_instruction, params, history=None, tool_trace=None):
-        """Conector de chat para DeepSeek usando la API compatible con OpenAI/Anthropic."""
-        ICP = self.env['ir.config_parameter'].sudo()
-        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
-        if not api_key:
-            return "Falta configurar la API Key de DeepSeek en Ajustes → Asistente de IA."
-
-        model = ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
-        messages = [{"role": "system", "content": system_instruction}]
-        if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": prompt})
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.2,
-        }
-        try:
-            res = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
-            if res.status_code == 200:
-                data = res.json()
-                return data['choices'][0]['message'].get('content', '') or "Sin respuesta."
+            if len(extracted_text.strip()) > 80:
+                full_prompt = f"{extraction_prompt}\n\nCONTENIDO DEL DOCUMENTO:\n{extracted_text}"
+                return self._call_deepseek_structured(full_prompt, model_override=model)
             else:
-                return f"Error de DeepSeek ({res.status_code}): {res.text}"
-        except Exception as e:
-            return f"Excepción al conectar con DeepSeek: {str(e)}"
+                raise UserError(_(
+                    "La API de DeepSeek requiere imágenes (JPG/PNG) o PDFs con texto digital seleccionable.\n\n"
+                    "Este documento PDF parece ser escaneado o tener texto vectorizado a curvas.\n"
+                    "Para procesar este archivo directamente como documento visual, use Google Gemini o Anthropic Claude en "
+                    "Ajustes > Asistente de IA, o cargue la ficha técnica en formato imagen (JPG/PNG)."
+                ))
 
-    def _call_deepseek_structured(self, prompt, model_override=None):
-        """Llamada a DeepSeek esperando respuesta estructurada JSON."""
-        ICP = self.env['ir.config_parameter'].sudo()
-        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
-        if not api_key:
-            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
-
-        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"}
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        try:
-            response = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            raise UserError(_("Error al conectar con DeepSeek: %s") % str(e))
-
-        data = response.json()
-        try:
-            text = data['choices'][0]['message']['content']
-        except (KeyError, IndexError):
-            raise UserError(_("DeepSeek no devolvió una respuesta válida: %s") % str(data)[:500])
-
-        return self._extract_json_from_text(text)
-
-    def _call_deepseek_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
-        """Envía documento/imagen a DeepSeek usando endpoint Anthropic o OpenAI."""
-        ICP = self.env['ir.config_parameter'].sudo()
-        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
-        if not api_key:
-            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
-
-        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
-
-        # 1. Probar primero vía endpoint compatible con Anthropic
-        doc_type = 'document' if mime_type == 'application/pdf' else 'image'
-        anthropic_payload = {
-            "model": model,
-            "max_tokens": 4096,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": doc_type, "source": {"type": "base64", "media_type": mime_type, "data": file_base64}},
-                    {"type": "text", "text": extraction_prompt},
-                ],
-            }],
-        }
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        try:
-            response = requests.post("https://api.deepseek.com/anthropic/v1/messages", json=anthropic_payload, headers=headers, timeout=60)
-            if response.status_code == 200:
-                data = response.json()
-                text = "".join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
-                return self._extract_json_from_text(text)
-        except Exception as e:
-            _logger.warning("Fallo en endpoint Anthropic de DeepSeek: %s. Reintentando por OpenAI format...", e)
-
-        # 2. Fallback a endpoint chat/completions OpenAI
+        # Caso B: Si es imagen (JPG, PNG, WEBP), DeepSeek Flash tiene visión nativa
         image_url = f"data:{mime_type};base64,{file_base64}"
         openai_payload = {
             "model": model,
