@@ -1206,8 +1206,42 @@ class AIAssistant(models.AbstractModel):
         model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
 
         # Caso A: Si es PDF, DeepSeek no procesa archivos binarios PDF directamente.
-        # Extraemos el texto digital con PyPDF2 y se lo enviamos como prompt.
+        # Intentamos primero renderizar las páginas a imagen con pypdfium2 para visión directa.
+        # Si pypdfium2 no estuviera disponible, extraemos el texto digital con PyPDF2.
         if mime_type == 'application/pdf':
+            # 1. Renderizado a imagen (visión artificial directa para deepseek-flash)
+            try:
+                import pypdfium2 as pdfium
+                import base64
+                pdf_bytes = base64.b64decode(file_base64)
+                pdf = pdfium.PdfDocument(pdf_bytes)
+                content_parts = [{"type": "text", "text": extraction_prompt}]
+                for i in range(min(len(pdf), 4)):
+                    page = pdf[i]
+                    image = page.render(scale=2).to_pil()
+                    buffer = io.BytesIO()
+                    image.save(buffer, format='JPEG', quality=85)
+                    b64_page = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64_page}"}
+                    })
+                openai_payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": content_parts}],
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"}
+                }
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                response = requests.post("https://api.deepseek.com/chat/completions", json=openai_payload, headers=headers, timeout=60)
+                response.raise_for_status()
+                data = response.json()
+                text = data['choices'][0]['message']['content']
+                return self._extract_json_from_text(text)
+            except Exception as render_err:
+                _logger.warning("Fallo al renderizar PDF con pypdfium2: %s. Reintentando extracción de texto...", render_err)
+
+            # 2. Fallback por extracción de texto digital con PyPDF2
             extracted_text = ""
             try:
                 import base64
@@ -1223,9 +1257,8 @@ class AIAssistant(models.AbstractModel):
                 return self._call_deepseek_structured(full_prompt, model_override=model)
             else:
                 raise UserError(_(
-                    "La API de DeepSeek requiere imágenes (JPG/PNG) o PDFs con texto digital seleccionable.\n\n"
-                    "Este documento PDF parece ser escaneado o tener texto vectorizado a curvas.\n"
-                    "Para procesar este archivo directamente como documento visual, use Google Gemini o Anthropic Claude en "
+                    "No se pudo extraer información del PDF para DeepSeek.\n\n"
+                    "Para analizar este archivo, seleccione Google Gemini o Anthropic Claude en "
                     "Ajustes > Asistente de IA, o cargue la ficha técnica en formato imagen (JPG/PNG)."
                 ))
 
