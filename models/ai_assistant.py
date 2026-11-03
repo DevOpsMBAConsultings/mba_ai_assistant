@@ -117,6 +117,8 @@ class AIAssistant(models.AbstractModel):
             respuesta = self._call_claude(prompt, system_instruction, params, history, tool_trace)
         elif provider == 'openai':
             respuesta = self._call_openai(prompt, system_instruction, params, history, tool_trace)
+        elif provider == 'deepseek':
+            respuesta = self._call_deepseek(prompt, system_instruction, params, history, tool_trace)
         else:
             respuesta = self._call_gemini(prompt, system_instruction, params, user_id, tool_trace)
 
@@ -911,7 +913,9 @@ class AIAssistant(models.AbstractModel):
         """
         provider = provider or self.get_effective_provider(function_param_key)
 
-        if provider == 'gemini':
+        if provider == 'deepseek':
+            return self._call_deepseek_document(file_base64, mime_type, extraction_prompt, model_override)
+        elif provider == 'gemini':
             return self._call_gemini_document(file_base64, mime_type, extraction_prompt, model_override)
         elif provider == 'anthropic':
             return self._call_claude_document(file_base64, mime_type, extraction_prompt, model_override)
@@ -1126,6 +1130,130 @@ class AIAssistant(models.AbstractModel):
 
         return self._extract_json_from_text(text)
 
+    # =========================================================================
+    # DEEPSEEK CALLS (CHAT, STRUCTURED & DOCUMENT VISION)
+    # =========================================================================
+    def _call_deepseek(self, prompt, system_instruction, params, history=None, tool_trace=None):
+        """Conector de chat para DeepSeek usando la API compatible con OpenAI/Anthropic."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            return "Falta configurar la API Key de DeepSeek en Ajustes → Asistente de IA."
+
+        model = ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+        messages = [{"role": "system", "content": system_instruction}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
+        try:
+            res = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
+            if res.status_code == 200:
+                data = res.json()
+                return data['choices'][0]['message'].get('content', '') or "Sin respuesta."
+            else:
+                return f"Error de DeepSeek ({res.status_code}): {res.text}"
+        except Exception as e:
+            return f"Excepción al conectar con DeepSeek: {str(e)}"
+
+    def _call_deepseek_structured(self, prompt, model_override=None):
+        """Llamada a DeepSeek esperando respuesta estructurada JSON."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
+
+        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"}
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con DeepSeek: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("DeepSeek no devolvió una respuesta válida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_deepseek_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        """Envía documento/imagen a DeepSeek usando endpoint Anthropic o OpenAI."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
+
+        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+
+        # 1. Probar primero vía endpoint compatible con Anthropic
+        doc_type = 'document' if mime_type == 'application/pdf' else 'image'
+        anthropic_payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": doc_type, "source": {"type": "base64", "media_type": mime_type, "data": file_base64}},
+                    {"type": "text", "text": extraction_prompt},
+                ],
+            }],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        try:
+            response = requests.post("https://api.deepseek.com/anthropic/v1/messages", json=anthropic_payload, headers=headers, timeout=60)
+            if response.status_code == 200:
+                data = response.json()
+                text = "".join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+                return self._extract_json_from_text(text)
+        except Exception as e:
+            _logger.warning("Fallo en endpoint Anthropic de DeepSeek: %s. Reintentando por OpenAI format...", e)
+
+        # 2. Fallback a endpoint chat/completions OpenAI
+        image_url = f"data:{mime_type};base64,{file_base64}"
+        openai_payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]
+            }],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", json=openai_payload, headers=headers, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            text = data['choices'][0]['message']['content']
+            return self._extract_json_from_text(text)
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con DeepSeek Document: %s") % str(e))
+
+
     def _call_openai_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
         ICP = self.env['ir.config_parameter'].sudo()
         api_key = ICP.get_param('mba_ai_assistant.openai_api_key')
@@ -1164,3 +1292,127 @@ class AIAssistant(models.AbstractModel):
             raise UserError(_("OpenAI no devolvio una respuesta valida: %s") % str(data)[:500])
 
         return self._extract_json_from_text(text)
+
+    # =========================================================================
+    # DEEPSEEK CALLS (CHAT, STRUCTURED & DOCUMENT VISION)
+    # =========================================================================
+    def _call_deepseek(self, prompt, system_instruction, params, history=None, tool_trace=None):
+        """Conector de chat para DeepSeek usando la API compatible con OpenAI/Anthropic."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            return "Falta configurar la API Key de DeepSeek en Ajustes → Asistente de IA."
+
+        model = ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+        messages = [{"role": "system", "content": system_instruction}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
+        try:
+            res = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
+            if res.status_code == 200:
+                data = res.json()
+                return data['choices'][0]['message'].get('content', '') or "Sin respuesta."
+            else:
+                return f"Error de DeepSeek ({res.status_code}): {res.text}"
+        except Exception as e:
+            return f"Excepción al conectar con DeepSeek: {str(e)}"
+
+    def _call_deepseek_structured(self, prompt, model_override=None):
+        """Llamada a DeepSeek esperando respuesta estructurada JSON."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
+
+        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"}
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con DeepSeek: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("DeepSeek no devolvió una respuesta válida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_deepseek_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        """Envía documento/imagen a DeepSeek usando endpoint Anthropic o OpenAI."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
+
+        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+
+        # 1. Probar primero vía endpoint compatible con Anthropic
+        doc_type = 'document' if mime_type == 'application/pdf' else 'image'
+        anthropic_payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": doc_type, "source": {"type": "base64", "media_type": mime_type, "data": file_base64}},
+                    {"type": "text", "text": extraction_prompt},
+                ],
+            }],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        try:
+            response = requests.post("https://api.deepseek.com/anthropic/v1/messages", json=anthropic_payload, headers=headers, timeout=60)
+            if response.status_code == 200:
+                data = response.json()
+                text = "".join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+                return self._extract_json_from_text(text)
+        except Exception as e:
+            _logger.warning("Fallo en endpoint Anthropic de DeepSeek: %s. Reintentando por OpenAI format...", e)
+
+        # 2. Fallback a endpoint chat/completions OpenAI
+        image_url = f"data:{mime_type};base64,{file_base64}"
+        openai_payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]
+            }],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", json=openai_payload, headers=headers, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            text = data['choices'][0]['message']['content']
+            return self._extract_json_from_text(text)
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con DeepSeek Document: %s") % str(e))
+
