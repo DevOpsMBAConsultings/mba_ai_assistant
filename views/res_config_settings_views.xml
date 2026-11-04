@@ -9,26 +9,65 @@
             <xpath expr="//form" position="inside">
                 <app data-string="Asistente de IA" string="Asistente de IA" name="mba_ai_assistant" logo="/mba_ai_assistant/static/description/icon.png">
                     <block title="Configuración de Inteligencia Artificial" id="mba_ai_config_section">
-                        <setting id="mba_ai_providers" title="Proveedores de IA" help="Configura tus llaves API para interactuar con los diferentes modelos.">
+                        
+                        <setting id="mba_ai_unified_setting" title="Proveedor y Credenciales" help="Configura el proveedor de IA activo para todo el ERP.">
                             <div class="content-group">
-                                <div class="row mt16">
-                                    <label for="mba_ai_provider_default" class="col-lg-4 o_light_label"/>
-                                    <field name="mba_ai_provider_default" required="1"/>
+                                
+                                <!-- 1. PROVEEDOR -->
+                                <div class="row mt16 align-items-center">
+                                    <label for="mba_ai_provider_default" class="col-lg-3 o_light_label fw-bold" string="Proveedor"/>
+                                    <div class="col-lg-9">
+                                        <field name="mba_ai_provider_default" required="1"/>
+                                    </div>
                                 </div>
-                                <div class="row mt16">
-                                    <label for="mba_gemini_api_key" class="col-lg-4 o_light_label"/>
-                                    <field name="mba_gemini_api_key" password="True"/>
+
+                                <!-- 2. API KEY (Se adapta dinámicamente según el proveedor seleccionado) -->
+                                <div class="row mt16 align-items-center">
+                                    <label for="mba_deepseek_api_key" class="col-lg-3 o_light_label fw-bold" string="API Key" invisible="mba_ai_provider_default != 'deepseek'"/>
+                                    <label for="mba_anthropic_api_key" class="col-lg-3 o_light_label fw-bold" string="API Key" invisible="mba_ai_provider_default != 'anthropic'"/>
+                                    <label for="mba_gemini_api_key" class="col-lg-3 o_light_label fw-bold" string="API Key" invisible="mba_ai_provider_default != 'gemini'"/>
+                                    <label for="mba_openai_api_key" class="col-lg-3 o_light_label fw-bold" string="API Key" invisible="mba_ai_provider_default != 'openai'"/>
+                                    
+                                    <div class="col-lg-9">
+                                        <field name="mba_deepseek_api_key" password="True" placeholder="sk-... (DeepSeek API Key)" invisible="mba_ai_provider_default != 'deepseek'"/>
+                                        <field name="mba_anthropic_api_key" password="True" placeholder="sk-ant-... (Anthropic Claude API Key)" invisible="mba_ai_provider_default != 'anthropic'"/>
+                                        <field name="mba_gemini_api_key" password="True" placeholder="AIzaSy... (Google Gemini API Key)" invisible="mba_ai_provider_default != 'gemini'"/>
+                                        <field name="mba_openai_api_key" password="True" placeholder="sk-proj-... (OpenAI API Key)" invisible="mba_ai_provider_default != 'openai'"/>
+                                    </div>
                                 </div>
-                                <div class="row mt16">
-                                    <label for="mba_anthropic_api_key" class="col-lg-4 o_light_label"/>
-                                    <field name="mba_anthropic_api_key" password="True"/>
+
+                                <!-- 3. MODELO + BOTÓN ACTUALIZAR (Se adapta dinámicamente según el proveedor seleccionado) -->
+                                <div class="row mt16 align-items-center">
+                                    <label for="mba_deepseek_model" class="col-lg-3 o_light_label fw-bold" string="Modelo" invisible="mba_ai_provider_default != 'deepseek'"/>
+                                    <label for="mba_anthropic_model" class="col-lg-3 o_light_label fw-bold" string="Modelo" invisible="mba_ai_provider_default != 'anthropic'"/>
+                                    <label for="mba_gemini_model" class="col-lg-3 o_light_label fw-bold" string="Modelo" invisible="mba_ai_provider_default != 'gemini'"/>
+                                    <label for="mba_openai_model" class="col-lg-3 o_light_label fw-bold" string="Modelo" invisible="mba_ai_provider_default != 'openai'"/>
+
+                                    <div class="col-lg-6">
+                                        <field name="mba_deepseek_model" invisible="mba_ai_provider_default != 'deepseek'"/>
+                                        <field name="mba_anthropic_model" invisible="mba_ai_provider_default != 'anthropic'"/>
+                                        <field name="mba_gemini_model" invisible="mba_ai_provider_default != 'gemini'"/>
+                                        <field name="mba_openai_model" invisible="mba_ai_provider_default != 'openai'"/>
+                                    </div>
+                                    <div class="col-lg-3">
+                                        <button name="action_refresh_deepseek_models" type="object"
+                                                string="Actualizar Modelos" icon="fa-refresh"
+                                                class="btn btn-secondary btn-sm" invisible="mba_ai_provider_default != 'deepseek'"/>
+                                        <button name="action_refresh_anthropic_models" type="object"
+                                                string="Actualizar Modelos" icon="fa-refresh"
+                                                class="btn btn-secondary btn-sm" invisible="mba_ai_provider_default != 'anthropic'"/>
+                                        <button name="action_refresh_gemini_models" type="object"
+                                                string="Actualizar Modelos" icon="fa-refresh"
+                                                class="btn btn-secondary btn-sm" invisible="mba_ai_provider_default != 'gemini'"/>
+                                        <button name="action_refresh_openai_models" type="object"
+                                                string="Actualizar Modelos" icon="fa-refresh"
+                                                class="btn btn-secondary btn-sm" invisible="mba_ai_provider_default != 'openai'"/>
+                                    </div>
                                 </div>
-                                <div class="row mt16">
-                                    <label for="mba_openai_api_key" class="col-lg-4 o_light_label"/>
-                                    <field name="mba_openai_api_key" password="True"/>
-                                </div>
+
                             </div>
                         </setting>
+
                     </block>
                 </app>
             </xpath>

@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields, api
+from odoo import models, fields, api, _
+from odoo.exceptions import UserError
 import requests
 import json
 import ast
+import re
+import io
+import PyPDF2
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -115,6 +119,8 @@ class AIAssistant(models.AbstractModel):
             respuesta = self._call_claude(prompt, system_instruction, params, history, tool_trace)
         elif provider == 'openai':
             respuesta = self._call_openai(prompt, system_instruction, params, history, tool_trace)
+        elif provider == 'deepseek':
+            respuesta = self._call_deepseek(prompt, system_instruction, params, history, tool_trace)
         else:
             respuesta = self._call_gemini(prompt, system_instruction, params, user_id, tool_trace)
 
@@ -876,3 +882,406 @@ class AIAssistant(models.AbstractModel):
             
         except Exception as e:
             return f"Excepción al conectar con OpenAI: {str(e)}"
+
+
+    def get_effective_provider(self, function_param_key=None):
+        """Resuelve qué proveedor de IA usar para una función dada.
+
+        :param function_param_key: nombre del ir.config_parameter específico de la
+            función que llama (ej. 'mba_ai_cotizador_solar.provider'), definido por
+            el módulo puente correspondiente. Si no se pasa, o si el usuario activó
+            "usar una sola clave para todo", se usa el default global.
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        use_per_function = ICP.get_param('mba_ai_assistant.use_per_function_provider', 'False') == 'True'
+        if not use_per_function or not function_param_key:
+            return ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
+        return ICP.get_param(function_param_key) or ICP.get_param('mba_ai_assistant.provider_default', 'gemini')
+
+    def analyze_document(self, file_base64, mime_type, extraction_prompt, provider=None, model_override=None, function_param_key=None):
+        """Analiza un documento (PDF o imagen) en una sola pasada, sin historial de
+        conversacion ni tool-calling ERP. Devuelve un dict ya parseado de JSON.
+
+        :param file_base64: contenido del archivo codificado en base64 (sin el prefijo data:...)
+        :param mime_type: ej. 'application/pdf', 'image/png', 'image/jpeg'
+        :param extraction_prompt: instruccion de extraccion (el prompt ya afinado por el modulo que llama)
+        :param provider: 'gemini' | 'anthropic' | 'openai' -- si se especifica, gana sobre cualquier config
+        :param model_override: nombre de modelo especifico -- si no se especifica, usa el default de ese proveedor
+        :param function_param_key: ir.config_parameter especifico de la funcion que llama, para resolver el
+            proveedor efectivo cuando el usuario desactivo "usar una sola clave para todo"
+        :return: dict con el JSON parseado de la respuesta del modelo
+        :raises UserError: si falta configurar la API key, si el proveedor no soporta el tipo de archivo,
+                            o si la respuesta no se pudo parsear como JSON
+        """
+        provider = provider or self.get_effective_provider(function_param_key)
+
+        if provider == 'deepseek':
+            return self._call_deepseek_document(file_base64, mime_type, extraction_prompt, model_override)
+        elif provider == 'gemini':
+            return self._call_gemini_document(file_base64, mime_type, extraction_prompt, model_override)
+        elif provider == 'anthropic':
+            return self._call_claude_document(file_base64, mime_type, extraction_prompt, model_override)
+        elif provider == 'openai':
+            return self._call_openai_document(file_base64, mime_type, extraction_prompt, model_override)
+        else:
+            raise UserError(_("Proveedor de IA no reconocido: %s") % provider)
+
+    def _extract_json_from_text(self, text):
+        """Limpia fences de markdown (```json ... ```) y extrae el primer bloque {...}."""
+        text = re.sub(r'^```(?:json)?\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text.strip())
+        start = text.find('{')
+        end = text.rfind('}')
+        if start == -1 or end == -1:
+            raise UserError(_("La IA no devolvio un JSON valido. Respuesta recibida: %s") % text[:500])
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError as e:
+            raise UserError(_("No se pudo interpretar la respuesta de la IA como JSON: %s") % str(e))
+
+    def _call_gemini_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.gemini_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Google Gemini en Ajustes > Asistente de IA."))
+
+        model = model_override or 'gemini-2.5-pro'
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": extraction_prompt},
+                    {"inline_data": {"mime_type": mime_type, "data": file_base64}},
+                ]
+            }],
+            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Gemini: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['candidates'][0]['content']['parts'][0]['text']
+        except (KeyError, IndexError):
+            raise UserError(_("Gemini no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_claude_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.anthropic_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Anthropic Claude en Ajustes > Asistente de IA."))
+
+        model = model_override or 'claude-sonnet-4-5-20250929'
+        doc_type = 'document' if mime_type == 'application/pdf' else 'image'
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": doc_type, "source": {"type": "base64", "media_type": mime_type, "data": file_base64}},
+                    {"type": "text", "text": extraction_prompt},
+                ],
+            }],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        try:
+            response = requests.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Anthropic Claude: %s") % str(e))
+
+        data = response.json()
+        content_blocks = data.get('content', [])
+        text = None
+        for block in content_blocks:
+            if block.get('type') == 'text':
+                text = block.get('text')
+                break
+        if text is None:
+            raise UserError(_("Claude no devolvio una respuesta de texto valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+
+
+    def analyze_structured_data(self, prompt, provider=None, model_override=None, function_param_key=None):
+        """Analiza datos estructurados (texto/JSON ya armado por quien llama) en una sola
+        pasada, sin archivo adjunto y sin historial de conversacion. Hermano de
+        analyze_document(), para casos donde la entrada es texto en vez de un PDF/imagen
+        (ej. explicar o reconsiderar una decision ya tomada por otra logica, a partir de
+        datos ya calculados).
+
+        :param prompt: instruccion completa, con los datos relevantes ya serializados
+            dentro del texto por quien llama (este metodo no adjunta ningun archivo)
+        :param provider: 'gemini' | 'anthropic' | 'openai' -- si no se especifica, usa
+            get_effective_provider()
+        :param model_override: nombre de modelo especifico
+        :param function_param_key: ir.config_parameter especifico de la funcion que llama,
+            para resolver el proveedor efectivo cuando "usar una sola clave para todo" esta
+            desactivado
+        :return: dict con el JSON parseado de la respuesta del modelo
+        :raises UserError: si falta configurar la API key o si la respuesta no se pudo
+            parsear como JSON
+        """
+        provider = provider or self.get_effective_provider(function_param_key)
+
+        if provider == 'gemini':
+            return self._call_gemini_structured(prompt, model_override)
+        elif provider == 'anthropic':
+            return self._call_claude_structured(prompt, model_override)
+        elif provider == 'openai':
+            return self._call_openai_structured(prompt, model_override)
+        else:
+            raise UserError(_("Proveedor de IA no reconocido: %s") % provider)
+
+    def _call_gemini_structured(self, prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.gemini_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Google Gemini en Ajustes > Asistente de IA."))
+
+        model = model_override or 'gemini-2.5-pro'
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Gemini: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['candidates'][0]['content']['parts'][0]['text']
+        except (KeyError, IndexError):
+            raise UserError(_("Gemini no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_claude_structured(self, prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.anthropic_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de Anthropic Claude en Ajustes > Asistente de IA."))
+
+        model = model_override or 'claude-sonnet-4-5-20250929'
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        try:
+            response = requests.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con Anthropic Claude: %s") % str(e))
+
+        data = response.json()
+        content_blocks = data.get('content', [])
+        text = None
+        for block in content_blocks:
+            if block.get('type') == 'text':
+                text = block.get('text')
+                break
+        if text is None:
+            raise UserError(_("Claude no devolvio una respuesta de texto valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_openai_structured(self, prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.openai_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de OpenAI en Ajustes > Asistente de IA."))
+
+        model = model_override or 'gpt-4o'
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con OpenAI: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("OpenAI no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    # =========================================================================
+    # DEEPSEEK CALLS (CHAT, STRUCTURED & DOCUMENT VISION)
+    # =========================================================================
+    def _call_deepseek(self, prompt, system_instruction, params, history=None, tool_trace=None):
+        """Conector de chat para DeepSeek usando la API compatible con OpenAI/Anthropic."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            return "Falta configurar la API Key de DeepSeek en Ajustes → Asistente de IA."
+
+        model = ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+        messages = [{"role": "system", "content": system_instruction}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
+        try:
+            res = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
+            if res.status_code == 200:
+                data = res.json()
+                return data['choices'][0]['message'].get('content', '') or "Sin respuesta."
+            else:
+                return f"Error de DeepSeek ({res.status_code}): {res.text}"
+        except Exception as e:
+            return f"Excepción al conectar con DeepSeek: {str(e)}"
+
+    def _call_deepseek_structured(self, prompt, model_override=None):
+        """Llamada a DeepSeek esperando respuesta estructurada JSON."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
+
+        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"}
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con DeepSeek: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("DeepSeek no devolvió una respuesta válida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
+    def _call_deepseek_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        """Envía documento/imagen a DeepSeek. Soporta imágenes de visión nativa y extracción de texto de PDFs."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.deepseek_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de DeepSeek en Ajustes > Asistente de IA."))
+
+        model = model_override or ICP.get_param('mba_ai_assistant.deepseek_model', 'deepseek-flash')
+
+        # Caso A: Si es PDF, DeepSeek no procesa archivos binarios PDF directamente.
+        # Intentamos primero renderizar las páginas a imagen con pypdfium2 para visión directa.
+        # Si pypdfium2 no estuviera disponible, extraemos el texto digital con PyPDF2.
+        if mime_type == 'application/pdf':
+            # 1. Renderizado a imagen (visión artificial directa para deepseek-flash)
+            try:
+                import pypdfium2 as pdfium
+                import base64
+                pdf_bytes = base64.b64decode(file_base64)
+                pdf = pdfium.PdfDocument(pdf_bytes)
+                content_parts = [{"type": "text", "text": extraction_prompt}]
+                for i in range(min(len(pdf), 4)):
+                    page = pdf[i]
+                    image = page.render(scale=2).to_pil()
+                    buffer = io.BytesIO()
+                    image.save(buffer, format='JPEG', quality=85)
+                    b64_page = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64_page}"}
+                    })
+                openai_payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": content_parts}],
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"}
+                }
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                response = requests.post("https://api.deepseek.com/chat/completions", json=openai_payload, headers=headers, timeout=60)
+                response.raise_for_status()
+                data = response.json()
+                text = data['choices'][0]['message']['content']
+                return self._extract_json_from_text(text)
+            except Exception as render_err:
+                _logger.warning("Fallo al renderizar PDF con pypdfium2: %s. Reintentando extracción de texto...", render_err)
+
+            # 2. Fallback por extracción de texto digital con PyPDF2
+            extracted_text = ""
+            try:
+                import base64
+                pdf_bytes = base64.b64decode(file_base64)
+                reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+                for page in reader.pages:
+                    extracted_text += (page.extract_text() or "") + "\n"
+            except Exception as e:
+                _logger.warning("Error extrayendo texto del PDF para DeepSeek: %s", e)
+
+            if len(extracted_text.strip()) > 80:
+                full_prompt = f"{extraction_prompt}\n\nCONTENIDO DEL DOCUMENTO:\n{extracted_text}"
+                return self._call_deepseek_structured(full_prompt, model_override=model)
+            else:
+                raise UserError(_(
+                    "No se pudo extraer información del PDF para DeepSeek.\n\n"
+                    "Para analizar este archivo, seleccione Google Gemini o Anthropic Claude en "
+                    "Ajustes > Asistente de IA, o cargue la ficha técnica en formato imagen (JPG/PNG)."
+                ))
+
+        # Caso B: Si es imagen (JPG, PNG, WEBP), DeepSeek Flash tiene visión nativa
+        image_url = f"data:{mime_type};base64,{file_base64}"
+        openai_payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]
+            }],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.deepseek.com/chat/completions", json=openai_payload, headers=headers, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            text = data['choices'][0]['message']['content']
+            return self._extract_json_from_text(text)
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con DeepSeek Document: %s") % str(e))
+
