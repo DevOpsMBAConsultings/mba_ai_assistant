@@ -1035,7 +1035,9 @@ class AIAssistant(models.AbstractModel):
         """
         provider = provider or self.get_effective_provider(function_param_key)
 
-        if provider == 'gemini':
+        if provider == 'deepseek':
+            return self._call_deepseek_structured(prompt, model_override)
+        elif provider == 'gemini':
             return self._call_gemini_structured(prompt, model_override)
         elif provider == 'anthropic':
             return self._call_claude_structured(prompt, model_override)
