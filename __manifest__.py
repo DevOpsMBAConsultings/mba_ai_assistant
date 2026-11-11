@@ -1,8 +1,8 @@
 {
     'name': 'Asistente de IA (MBA Consultings)',
-    'version': '19.0.1.10',
+    'version': '19.0.1.11',
     'category': 'Productivity',
-    'summary': 'Asistente de Inteligencia Artificial (Claude, Gemini, OpenAI) en la barra superior (Systray) con contexto de vistas.',
+    'summary': 'Asistente de Inteligencia Artificial (Claude, Gemini, OpenAI, DeepSeek) en la barra superior (Systray) con contexto de vistas.',
     'description': """
         Este módulo integra un asistente de Inteligencia Artificial interactivo en el Systray de la barra superior.
         Permite configurar proveedores como Google Gemini, Anthropic Claude y OpenAI desde los Ajustes Generales del sistema.

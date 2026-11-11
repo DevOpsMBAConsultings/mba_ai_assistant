@@ -1134,6 +1134,45 @@ class AIAssistant(models.AbstractModel):
 
         return self._extract_json_from_text(text)
 
+    def _call_openai_document(self, file_base64, mime_type, extraction_prompt, model_override=None):
+        ICP = self.env['ir.config_parameter'].sudo()
+        api_key = ICP.get_param('mba_ai_assistant.openai_api_key')
+        if not api_key:
+            raise UserError(_("Falta configurar la API Key de OpenAI en Ajustes > Asistente de IA."))
+
+        if mime_type == 'application/pdf':
+            raise UserError(_(
+                "OpenAI (Chat Completions) no soporta analisis directo de PDF en este metodo. "
+                "Seleccione Gemini o Anthropic Claude para analizar documentos PDF."
+            ))
+
+        model = model_override or 'gpt-4o'
+        payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{file_base64}"}},
+                ],
+            }],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise UserError(_("Error al conectar con OpenAI: %s") % str(e))
+
+        data = response.json()
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError):
+            raise UserError(_("OpenAI no devolvio una respuesta valida: %s") % str(data)[:500])
+
+        return self._extract_json_from_text(text)
+
     # =========================================================================
     # DEEPSEEK CALLS (CHAT, STRUCTURED & DOCUMENT VISION)
     # =========================================================================
